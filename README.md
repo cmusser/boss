@@ -7,13 +7,14 @@ arranged in a two level hierarchy: one or more "applications" at the
 top level and under that, one or more "clients".
 
 ## Motivation
-`boss` was designed to deploy vpnd--a VPN system where the server side
-is designed to interact with a single peer--in a way that serves
-multiple clients. One way to solving this particular problem with
-`vpnd` would be modifying `vpnd` itself to support multiple clients.
-But this adds complexity, and with it, the possibility of bugs and
-performance degradation. `boss` allows a fairly elegant multi-user
-capability without requiring that `vpnd` be modified.
+`boss` was designed to deploy [vpnd](https://github.com/cmusser/vpnd)
+--a VPN system where the server side is designed to interact with a
+single peer--in a way that serves multiple clients. One way to solving
+this particular problem with `vpnd` would be modifying `vpnd` itself
+to support multiple clients.  But this adds complexity, and with it,
+the possibility of bugs and performance degradation. `boss` allows a
+fairly elegant multi-user capability without requiring that `vpnd` be
+modified.
 
 ## Usage
 
@@ -52,8 +53,8 @@ future enhancement.
 
 ## Security
 One could reasonably ask: "is invoking processes in response to web
-requests __really a good idea__?" At the very least, you should consider
-this to be a capability that should be used sparingly. A number of
+requests __really a good idea__?" At the very least, you should
+consider this something that should be used sparingly. A number of
 things could make it less iffy:
 
 - Running the service over HTTPS, which could be accomplished in the
