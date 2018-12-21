@@ -10,7 +10,6 @@ use tokio_process::{Child, CommandExt};
 pub enum LaunchResult {
     Launched(Child),
     AlreadyRunning,
-    AppNotFound,
     ClientNotFound,
     Err,
 }
@@ -18,7 +17,7 @@ pub enum LaunchResult {
 #[derive(Debug, Deserialize)]
 pub struct Boss {
     pub listen_addr: String,
-    pub apps: RwLock<HashMap<String,HashMap<String,ClientProcess>>>
+    pub clients: RwLock<HashMap<String,ClientProcess>>
 }
 
 impl Boss {
@@ -31,7 +30,7 @@ impl Boss {
                 match file.read_to_string(&mut yaml) {
                     Err(err) => Err(format!("couldn't read {}: {}", config_path, err.description())),
                     Ok(_) => {
-                        match serde_yaml::from_str::<Boss>(&yaml) {
+                        match ::serde_yaml::from_str::<Boss>(&yaml) {
                             Ok(config) => {
                                 println!("using config in '{}'", config_path);
                                 Ok(config)
@@ -44,55 +43,43 @@ impl Boss {
         }
     }
 
-    pub fn start(&self, app: &str, client: &str) -> LaunchResult {
-        match self.apps.write().unwrap().get_mut(app) {
-            Some(app_users) => {
-                match app_users.get_mut(client) {
-                    Some(client_data) => {
-                        match client_data.pid {
-                            Some(pid) => {
-                                println!("already running with pid {}", pid);
-                                LaunchResult::AlreadyRunning
-                            },
-                            None => {
-                                let cmd_array = client_data.launch_cmd.split_whitespace().collect::<Vec<&str>>();
-                                match Command::new(&cmd_array[0]).args(cmd_array[1..].into_iter()).spawn_async() {
-                                    Ok(command) => {
-                                        let pid = command.id();
-                                        println!("launching {} with PID {}", client_data.launch_cmd, pid);
-                                        client_data.pid = Some(pid);
-                                        LaunchResult::Launched(command)
-                                    },
-                                    Err(e) =>  {
-                                        println!("couldn't start \"{}\": {}", client_data.launch_cmd, e);
-                                        LaunchResult::Err
-                                    }
-                                }
-                            }
-                        }
+    pub fn start(&self, client: &str) -> LaunchResult {
+        match self.clients.write().unwrap().get_mut(client) {
+            Some(client_data) => {
+                match client_data.pid {
+                    Some(pid) => {
+                        println!("already running with pid {}", pid);
+                        LaunchResult::AlreadyRunning
                     },
                     None => {
-                        println!("no user {} for {}",client, app);
-                        LaunchResult::ClientNotFound
+                        let cmd_array = client_data.launch_cmd.split_whitespace().collect::<Vec<&str>>();
+                        match Command::new(&cmd_array[0]).args(cmd_array[1..].into_iter()).spawn_async() {
+                            Ok(command) => {
+                                let pid = command.id();
+                                println!("launching {} with PID {}", client_data.launch_cmd, pid);
+                                client_data.pid = Some(pid);
+                                LaunchResult::Launched(command)
+                            },
+                            Err(e) =>  {
+                                println!("couldn't start \"{}\": {}", client_data.launch_cmd, e);
+                                LaunchResult::Err
+                            }
+                        }
                     }
                 }
             },
             None => {
-                println!("application {} not found", app);
-                LaunchResult::AppNotFound
+                println!("client \"{}\" not found", client);
+                LaunchResult::ClientNotFound
             }
         }
     }
 
-    pub fn cleanup(&self, app: &str, client: &str) {
-        match self.apps.write().unwrap().get_mut(app) {
-            Some(app_users) => {
-                match app_users.get_mut(client) {
-                    Some(client_data) => client_data.pid = None,
-                    None => println!("no user {} for {}",client, app)
-                }
-            },
-            None => println!("application {} not found", app),
+    pub fn cleanup(&self, client: &str) {
+        match self.clients.write().unwrap().get_mut(client) {
+            Some(client_data) => client_data.pid = None,
+            None => println!("client \"{}\" not found", client)
+
         }
     }
 }

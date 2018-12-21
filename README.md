@@ -2,9 +2,9 @@
 
 ## Overview
 BOSS is a webserver that responds to requests by invoking a process if
-the process is not known to be running already. Processes to run are
-arranged in a two level hierarchy: one or more "applications" at the
-top level and under that, one or more "clients".
+the process is not known to be running already. The configuration
+allows you to specify the URL for a given client and for each client,
+the command to invoke.
 
 ## Motivation
 `boss` was designed to deploy [vpnd](https://github.com/cmusser/vpnd)
@@ -21,22 +21,19 @@ modified.
 ### Configuration
 
 The configuration file is in YAML format and describes the listen
-address, the list of applications and for each app, the list of
-clients. Each client specifies a command to invoke. The configuration
-looks like this:
+address, and list of client URLs. For each client URL, a command to
+invoke is specified. The configuration looks like this:
 
     listen_addr: 0.0.0.0:8080
-    apps:
-      some-app:
-        fred:
-          launch_cmd: /usr/bin/some-app -c /etc/some-app/fred.conf
-        martha:
-          launch_cmd: /usr/bin/some-app -c /etc/vpnd/some-app/martha.conf
-      some-other-app:
-        johnny:
-          launch_cmd: /usr/bin/some-other-app -c /etc/some-other-app/johnny.conf
-        bocephus:
-          launch_cmd: /usr/bin/some-other-app -c /etc/some-other-app/bocephus.conf
+    clients:
+      /some-app/fred
+        launch_cmd: /usr/bin/some-app -c /etc/some-app/fred.conf
+      /some-app/martha:
+        launch_cmd: /usr/bin/some-app -c /etc/vpnd/some-app/martha.conf
+      /some-other-app/johnny:
+        launch_cmd: /usr/bin/some-other-app -c /etc/some-other-app/johnny.conf
+      /some-other-app/bocephus:
+        launch_cmd: /usr/bin/some-other-app -c /etc/some-other-app/bocephus.conf
 
 ### Client access
 

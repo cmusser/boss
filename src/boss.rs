@@ -31,35 +31,26 @@ fn run(config: Arc<Boss>) {
 
         let config_for_start = config.clone();
         service_fn_ok(move |req| {
-            let uri = req.uri().path().trim_start_matches("/").trim_end_matches("/");
-            if uri.matches('/').count() == 1 {
-                let segments = uri.split("/").take(2).collect::<Vec<&str>>();
-                let (app, client) = (String::from(segments[0]), String::from(segments[1]));
-                match config_for_start.start(&app, &client) {
-                    LaunchResult::Launched(command) => {
-                        let config_for_cleanup = config_for_start.clone();
-                        let command_complete = command
-                            .map(|status| { (status, config_for_cleanup) })
-                            .then(move|args| {
-                                let (status, config) = args.unwrap();
-                                println!("command {} for {} has terminated with status {}", client, app, status);
-                                config.cleanup(&app, &client);
-                                futures::future::ok(())
-                            });
-                        rt::spawn(command_complete);
-                        Response::new(Body::from("available\n"))
-                    },
-                    LaunchResult::AlreadyRunning => Response::new(Body::from("available\n")),
-                    LaunchResult::AppNotFound => non_ok_response!(StatusCode::NOT_FOUND,
-                                                                  format!("application {} not found", app)),
-                    LaunchResult::ClientNotFound => non_ok_response!(StatusCode::NOT_FOUND,
-                                                                     format!("no user {} for {}", client, app)),
-                    LaunchResult::Err => non_ok_response!(StatusCode::INTERNAL_SERVER_ERROR,
-                                                          "couldn't start"),
-                }
-            } else {
-                non_ok_response!(StatusCode::BAD_REQUEST,
-                                 "wrong number of path segments")
+            let client = String::from(req.uri().path());
+            match config_for_start.start(&client) {
+                LaunchResult::Launched(command) => {
+                    let config_for_cleanup = config_for_start.clone();
+                    let command_complete = command
+                        .map(|status| { (status, config_for_cleanup) })
+                        .then(move|args| {
+                            let (status, config) = args.unwrap();
+                            println!("command for \"{}\" has terminated with status {}", client, status);
+                            config.cleanup(&client);
+                            futures::future::ok(())
+                        });
+                    rt::spawn(command_complete);
+                    Response::new(Body::from("available\n"))
+                },
+                LaunchResult::AlreadyRunning => Response::new(Body::from("available\n")),
+                LaunchResult::ClientNotFound => non_ok_response!(StatusCode::NOT_FOUND,
+                                                                 format!("no client \"{}\"", client)),
+                LaunchResult::Err => non_ok_response!(StatusCode::INTERNAL_SERVER_ERROR,
+                                                      "couldn't start"),
             }
         })
     };
