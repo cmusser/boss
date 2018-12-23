@@ -39,9 +39,9 @@ fn run(boss: Boss) {
                     let command_complete = command
                         .map(|status| { (status, boss_for_cleanup) })
                         .then(move|args| {
-                            let (status, config) = args.unwrap();
+                            let (status, boss) = args.unwrap();
                             println!("command for \"{}\" has terminated with status {}", client, status);
-                            config.cleanup(&client);
+                            boss.cleanup(&client);
                             futures::future::ok(())
                         });
                     rt::spawn(command_complete);
