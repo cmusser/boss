@@ -25,18 +25,19 @@ macro_rules! non_ok_response {
     }
 }
 
-fn run(config: Arc<Boss>) {
-    let addr: SocketAddr = config.listen_addr.parse().unwrap();
+fn run(boss: Boss) {
+    let addr: SocketAddr = boss.listen_addr.parse().unwrap();
+    let boss = Arc::new(boss);
     let boss_service = move || {
 
-        let config_for_start = config.clone();
+        let boss_for_start = boss.clone();
         service_fn_ok(move |req| {
             let client = String::from(req.uri().path());
-            match config_for_start.start(&client) {
+            match boss_for_start.start(&client) {
                 LaunchResult::Launched(command) => {
-                    let config_for_cleanup = config_for_start.clone();
+                    let boss_for_cleanup = boss_for_start.clone();
                     let command_complete = command
-                        .map(|status| { (status, config_for_cleanup) })
+                        .map(|status| { (status, boss_for_cleanup) })
                         .then(move|args| {
                             let (status, config) = args.unwrap();
                             println!("command for \"{}\" has terminated with status {}", client, status);
@@ -73,7 +74,7 @@ fn main() {
         .get_matches();
 
     match Boss::new(matches.value_of("config").unwrap()) {
-        Ok(config) => run(Arc::new(config)),
+        Ok(boss) => run(boss),
         Err(e) => eprintln!("{}", e),
     }
 }
