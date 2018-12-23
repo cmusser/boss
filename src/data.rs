@@ -31,9 +31,9 @@ impl Boss {
                     Err(err) => Err(format!("couldn't read {}: {}", config_path, err.description())),
                     Ok(_) => {
                         match ::serde_yaml::from_str::<Boss>(&yaml) {
-                            Ok(config) => {
+                            Ok(boss) => {
                                 println!("using config in '{}'", config_path);
-                                Ok(config)
+                                Ok(boss)
                             },
                             Err(e) => Err(format!("{}", e.description()))
                         }
