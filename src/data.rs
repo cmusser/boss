@@ -2,22 +2,26 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
 use std::io::prelude::*;
+use std::net::SocketAddr;
 use std::process::Command;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
-use tokio_process::{Child, CommandExt};
+use hyper::{Body, Response, Server};
+use hyper::http::StatusCode;
+use hyper::service::service_fn_ok;
+use hyper::rt::{self, Future};
+use tokio_process::CommandExt;
 
-pub enum LaunchResult {
-    Launched(Child),
-    AlreadyRunning,
-    ClientNotFound,
-    Err,
+macro_rules! non_ok_response {
+    ($status:expr, $msg:expr) => {
+    Response::builder().status($status).body(Body::from($msg)).unwrap()
+    }
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Boss {
     pub listen_addr: String,
-    pub clients: RwLock<HashMap<String,ClientProcess>>
+    pub clients: Arc<RwLock<HashMap<String,ClientProcess>>>
 }
 
 impl Boss {
@@ -43,45 +47,65 @@ impl Boss {
         }
     }
 
-    pub fn start(&self, client: &str) -> LaunchResult {
-        match self.clients.write().unwrap().get_mut(client) {
-            Some(client_data) => {
-                match client_data.pid {
-                    Some(pid) => {
-                        println!("already running with pid {}", pid);
-                        LaunchResult::AlreadyRunning
-                    },
-                    None => {
-                        let cmd_array = client_data.launch_cmd.split_whitespace().collect::<Vec<&str>>();
-                        match Command::new(&cmd_array[0]).args(cmd_array[1..].into_iter()).spawn_async() {
-                            Ok(command) => {
-                                let pid = command.id();
-                                println!("launching {} with PID {}", client_data.launch_cmd, pid);
-                                client_data.pid = Some(pid);
-                                LaunchResult::Launched(command)
+    pub fn run(boss: Boss) {
+        let addr: SocketAddr = boss.listen_addr.parse().unwrap();
+        let boss_service = move || {
+            let clients_for_start = boss.clients.clone();
+            service_fn_ok(move |req| {
+                let client = String::from(req.uri().path());
+                
+                match clients_for_start.write().unwrap().get_mut(&client) {
+                    Some(client_data) => {
+                        match client_data.pid {
+                            Some(pid) => {
+                                println!("already running with pid {}", pid);
+                                Response::new(Body::from("available\n"))
                             },
-                            Err(e) =>  {
-                                println!("couldn't start \"{}\": {}", client_data.launch_cmd, e);
-                                LaunchResult::Err
+                            None => {
+                                let cmd_array = client_data.launch_cmd.split_whitespace().collect::<Vec<&str>>();
+                                match Command::new(&cmd_array[0]).args(cmd_array[1..].into_iter()).spawn_async() {
+                                    Ok(command) => {
+                                        let pid = command.id();
+                                        println!("launching {} with PID {}", client_data.launch_cmd, pid);
+                                        client_data.pid = Some(pid);
+                                        let clients_for_cleanup = clients_for_start.clone();
+                                        let command_complete = command
+                                            .map(|status| { (status, clients_for_cleanup) })
+                                            .then(move|args| {
+                                                let (status, clients_for_cleanup) = args.unwrap();
+                                                println!("command for \"{}\" has terminated with status {}", client, status);
+                                                match clients_for_cleanup.write().unwrap().get_mut(&client) {
+                                                    Some(client_data) => client_data.pid = None,
+                                                    None => println!("client \"{}\" not found", client)
+                                                }
+                                                futures::future::ok(())
+                                            });
+                                        rt::spawn(command_complete);
+                                        Response::new(Body::from("available\n"))
+                                    },
+                                    Err(e) =>  {
+                                        println!("couldn't start \"{}\": {}", client_data.launch_cmd, e);
+                                        non_ok_response!(StatusCode::INTERNAL_SERVER_ERROR, "couldn't start")
+                                    }
+                                }
                             }
                         }
+                    },
+                    None => {
+                        println!("client \"{}\" not found", client);
+                        non_ok_response!(StatusCode::NOT_FOUND,
+                                         format!("no client \"{}\"", client))
                     }
                 }
-            },
-            None => {
-                println!("client \"{}\" not found", client);
-                LaunchResult::ClientNotFound
-            }
-        }
+            })
+        };
+        
+        let server = Server::bind(&addr).serve(boss_service)
+            .map_err(|e| eprintln!("server error: {}", e));
+        println!("Listening on http://{}", addr);
+        rt::run(server);
     }
 
-    pub fn cleanup(&self, client: &str) {
-        match self.clients.write().unwrap().get_mut(client) {
-            Some(client_data) => client_data.pid = None,
-            None => println!("client \"{}\" not found", client)
-
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
