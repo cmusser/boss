@@ -5,6 +5,7 @@ authors = ["Chuck Musser <cmusser@sonic.net>"]
 
 [dependencies]
 clap = "2"
+daemonize = "0.3.0"
 futures = "0.1"
 hyper = "0.12"
 net2 = "0.2"

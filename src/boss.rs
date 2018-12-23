@@ -1,16 +1,19 @@
 extern crate boss;
 extern crate clap;
+extern crate daemonize;
 extern crate futures;
 extern crate hyper;
 extern crate tokio;
 extern crate tokio_core;
 extern crate tokio_process;
 
+use std::fs::File;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use boss::data::{Boss, LaunchResult};
 use clap::{App, Arg};
+use daemonize::Daemonize;
 use hyper::{Body, Response, Server};
 use hyper::http::StatusCode;
 use hyper::service::service_fn_ok;
@@ -18,6 +21,8 @@ use hyper::rt::{self, Future};
 
 const VERSION: &'static str = "0.1.0";
 const DEFAULT_CONFIG_FILE: &'static str = "/etc/boss.yaml";
+const DEFAULT_DAEMON_STDOUT_FILENAME: &'static str = "/var/log/boss.out";
+const DEFAULT_DAEMON_STDERR_FILENAME: &'static str = "/var/log/boss.err";
 
 macro_rules! non_ok_response {
     ($status:expr, $msg:expr) => {
@@ -62,6 +67,19 @@ fn run(boss: Boss) {
     rt::run(server);
 }
 
+fn run_daemon(boss: Boss) -> Result<(), String> {
+    let stdout = File::create(DEFAULT_DAEMON_STDOUT_FILENAME)
+        .map_err(|e| format!("couldn't open {} -- {}",
+                             DEFAULT_DAEMON_STDOUT_FILENAME, e))?;
+    let stderr = File::create(DEFAULT_DAEMON_STDERR_FILENAME)
+                .map_err(|e| format!("couldn't open {} -- {}",
+                             DEFAULT_DAEMON_STDERR_FILENAME, e))?;
+    let daemonize = Daemonize::new().pid_file("/var/run/boss.pid")
+                            .stdout(stdout).stderr(stderr);
+    daemonize.start().map_err(|e| format!("couldn't daemonize -- {}", e))?;
+    Ok(run(boss))
+}
+
 fn main() {
     let matches = App::new("boss")
         .version(VERSION)
@@ -71,10 +89,19 @@ fn main() {
              .short("c").long("config")
              .help("YAML file containing configuration")
              .default_value(DEFAULT_CONFIG_FILE))
+        .arg(Arg::with_name("foreground")
+             .short("f").long("foreground")
+             .help("Run in foreground"))
         .get_matches();
 
     match Boss::new(matches.value_of("config").unwrap()) {
-        Ok(boss) => run(boss),
+        Ok(boss) => {
+            if matches.is_present("foreground") {
+                run(boss)
+            } else {
+                if let Err(e) = run_daemon(boss) { eprintln!("failed: {}", e) }
+            }
+        },
         Err(e) => eprintln!("{}", e),
     }
 }
