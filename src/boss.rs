@@ -165,6 +165,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         tokio::select! {
+            /* Process the receipt of the HUP signal */
             _ = hangups.recv() => {
                 match read_cmds(&opt.config_file) {
                     Ok(mut new_cmds) => {
@@ -192,23 +193,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
 
-                        /* Stop and restart commands that have been updated. */
+                        /* Stop commands that have been updated, re-inserting the
+                           new argument vector back into the set. These will be
+                           restarted with the revised args when the current ones finish.
+                        */
                         for cmd_name in cur_cmd_names.intersection(&updated_cmd_names) {
                             if cmds.get(cmd_name).unwrap().argv != new_cmds.get(cmd_name).unwrap().argv {
                                 changes = true;
-                                let mut cmd = new_cmds.remove(cmd_name).unwrap();
-                                // It's possible that the new process won't start after the old
-                                // one terminates which may be bad in situations where you want
-                                // to minimize downtime.
+                                let cmd = new_cmds.remove(cmd_name).unwrap();
                                 stop_process(cmd_name, &mut cmds);
-                                match get_cmd_future(cmd_name, &mut cmd) {
-                                    Ok(spawned_child) => {
-                                        println!("starting {}", cmd_name);
-                                        all_futures.push(Either::Right(spawned_child));
-                                        cmds.insert(cmd_name.to_string(), cmd);
-                                    }
-                                    Err(e) => println!("spawn failed: {:?}", e),
-                                }
+                                cmds.insert(cmd_name.to_string(), cmd);
                             }
                         }
                         if !changes { println!("no changes to commands") }
