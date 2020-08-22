@@ -1,76 +1,74 @@
 # BOSS - the Barely Omnicient System Starter
 
 ## Overview
-BOSS is a webserver that responds to requests by invoking a process if
-the process is not known to be running already. The configuration
-allows you to specify the URL for a given client and for each client,
-the command to invoke.
+BOSS manages a set of commmands described in a YAML file, spawning
+a process for each in the forground and waiting for them to finish.
+On completion, the processes are restarted. You can add, remove
+or update the commands in the YAML file and inform BOSS via a 
+signal. In response, it will update the set of running commands, spawning
+and terminating processes as needed.
 
 ## Motivation
-`boss` was designed to deploy [vpnd](https://github.com/cmusser/vpnd)
---a VPN system where the server side is designed to interact with a
-single peer--in a way that serves multiple clients. One way to solving
-this particular problem with `vpnd` would be modifying `vpnd` itself
-to support multiple clients.  But this adds complexity, and with it,
-the possibility of bugs and performance degradation. `boss` allows a
-fairly elegant multi-user capability without requiring that `vpnd` be
-modified.
+`boss` is useful for managing sets of closely coordinated processes,
+A specific application is deploying [vpnd](https://github.com/cmusser/vpnd),
+a VPN system where each process interacts with a single client. To serve
+multiple clients, multiple server processes are needed, which gets unwieldy
+if managed by hand. One way to solving this problem would be modifying
+`vpnd` itself to support multiple clients. But this adds complexity, and
+inevitably, bugs and performance degradation. `boss` allows easy management
+for cases similar to this.
 
 ## Usage
 
 ### Configuration
 
-The configuration file is in YAML format and describes the listen
-address, and list of client URLs. For each client URL, a command to
+The configuration file is in YAML format and describes the list of commands.
+Each command has a name, and the actual command to execute:
 invoke is specified. The configuration looks like this:
 
-    listen_addr: 0.0.0.0:8080
-    clients:
-      /some-app/fred
-        launch_cmd: /usr/bin/some-app -c /etc/some-app/fred.conf
-      /some-app/martha:
-        launch_cmd: /usr/bin/some-app -c /etc/vpnd/some-app/martha.conf
-      /some-other-app/johnny:
-        launch_cmd: /usr/bin/some-other-app -c /etc/some-other-app/johnny.conf
-      /some-other-app/bocephus:
-        launch_cmd: /usr/bin/some-other-app -c /etc/some-other-app/bocephus.conf
+    First Task:
+      argv: /usr/bin/cmd first 4
+    Second Task:
+      argv: /usr/bin/cmd second 10
+    Second And A Half Task:
+      argv: /usr/bin/cmd second-and-a-half 5
+    Third Task:
+      argv: /usr/bin/cmd third 6
 
-### Client access
+### Invocation
 
-To request an application for a client, use a web client, such as curl:
+Launch `boss` and it will spawn all tasks in its configuration. The
+stdin/stdout/stderr for the spawned processses are inherited from boss itself,
+so redirect the output of boss in a way suitable for the commands. To change
+the set of commands, or the actual commands invoked, edit the configuration
+file and send `boss` the `SIGHUP` signal.
 
-	 ~ >> curl localhost:8080/some-app/fred
-    available
+## History
 
-Note that a response from `boss` only indicates whether the requested
-service is available. It does not return any information about
-it--the assumption is that clients have all the information needed to
-connect to said service. Adding this kind of information might be a
-future enhancement.
+The previous version of this program took a substantially different form, both
+in design and implementation. It used to have a webserver frontend, the idea
+being that one started processes individually via REST requests. Aside from
+the potential for security problems (like, don't just run this bound to an
+Internet-exposed address), individual launching didn't actually add much value.
+If you want to start processes in an ad hoc manner, just start them by hand.
 
-## Security
-One could reasonably ask: "is invoking processes in response to web
-requests __really a good idea__?" At the very least, you should
-consider this something that should be used sparingly. A number of
-things could make it less iffy:
+As for the implementation, it included a Hyper-based webserver and was
+pre-`async/.await`, so the the asynchronous aspects of the program were
+harder to read.
 
-- Running the service over HTTPS, which could be accomplished in the
-  short term by putting `boss` behind a reverse proxy that does
-  the TLS termination. The `listen_addr` configuration directive
-  is of use here. Small setups could just listen on `localhost`.
-  
-- Having some kind of authentication method, at the very least an API
-  key or request token encrypted with a shared secret.
-  
-- Very careful consideration of the commands you put in the
-  configuration file.
-  
-- The possibility that this should be a library crate that is used by
-  programs that contain a hardwired set of very specific commands to
-  execute.  This would encourage programs explicitly designed
-  to have limited scope. The responsibility for thinking this through
-  would be with the application developer.
+## Future
+This could evolve into an something that could be used instead of `systemd`
+or Docker Compose, possibly for use on non-Linux systems or embedded machines
+where the full Linux wasn't present. It needs the ability to specify whether
+processes should be restarted on termination and probably needs more logic
+for signal handling in general, like responding differently depending on the
+signal received by a process. Another enhancement might be reloading by
+simply editing the configuration file, which `boss` could watch via `inotify`
+or a similar mechanism. No need to send a signal to re-read the config.
 
-All these things considered, `boss` is a good way of providing a
-flexible command starter for programs that are designed to run on
-behalf of (and at the request of) a single external client.
+Right now, the process starting logic is repeated in three different places
+because factoring it out into a function involves type-system challenges best
+addresses by an unstable feature that allows type aliases for `impl Trait`.
+This is described by [Rust RFC 2515](https://github.com/rust-lang/rfcs/blob/master/text/2515-type_alias_impl_trait.md).
+To keep things compilable on stable, repetition is used, but a branch that
+uses this feature will be maintained for experimentation.

@@ -1,0 +1,6 @@
+First Task:
+  argv: test/repeat.sh first 4
+Second Task:
+  argv: test/repeat.sh second 10
+Third Task:
+  argv: test/repeat.sh third 6

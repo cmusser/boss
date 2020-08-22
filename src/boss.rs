@@ -1,107 +1,277 @@
-extern crate boss;
-extern crate clap;
-extern crate daemonize;
-extern crate futures;
-extern crate hyper;
-extern crate tokio;
-extern crate tokio_core;
-extern crate tokio_process;
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+    process::ExitStatus,
+    time::Instant,
+};
 
-use std::fs::File;
-use std::net::SocketAddr;
-use std::sync::Arc;
+use anyhow::Result;
+use futures::{
+    future::Either,
+    stream::{FuturesUnordered, StreamExt},
+};
+use nix::{
+    sys::signal::{kill, Signal},
+    unistd::Pid,
+};
+use serde::{Deserialize, Deserializer};
+use serde_yaml;
+use shellwords;
+use structopt::StructOpt;
+use tokio::{
+    process::Command,
+    signal::unix::{signal, SignalKind},
+};
 
-use boss::data::{Boss, LaunchResult};
-use clap::{App, Arg};
-use daemonize::Daemonize;
-use hyper::{Body, Response, Server};
-use hyper::http::StatusCode;
-use hyper::service::service_fn_ok;
-use hyper::rt::{self, Future};
-
-const VERSION: &'static str = "0.1.0";
-const DEFAULT_CONFIG_FILE: &'static str = "/etc/boss.yaml";
-const DEFAULT_DAEMON_STDOUT_FILENAME: &'static str = "/var/log/boss.out";
-const DEFAULT_DAEMON_STDERR_FILENAME: &'static str = "/var/log/boss.err";
-
-macro_rules! non_ok_response {
-    ($status:expr, $msg:expr) => {
-    Response::builder().status($status).body(Body::from($msg)).unwrap()
-    }
+/* The command specification, along with an alias for its "collection type"
+*/
+#[derive(Deserialize)]
+struct CmdSpec {
+    #[serde(deserialize_with = "get_argv_from_str")]
+    argv: Vec<String>,
+    #[serde(skip_deserializing)]
+    pid: Option<Pid>,
 }
 
-fn run(boss: Boss) {
-    let addr: SocketAddr = boss.listen_addr.parse().unwrap();
-    let boss = Arc::new(boss);
-    let boss_service = move || {
+type Cmds = HashMap<String, CmdSpec>;
 
-        let boss_for_start = boss.clone();
-        service_fn_ok(move |req| {
-            let client = String::from(req.uri().path());
-            match boss_for_start.start(&client) {
-                LaunchResult::Launched(command) => {
-                    let boss_for_cleanup = boss_for_start.clone();
-                    let command_complete = command
-                        .map(|status| { (status, boss_for_cleanup) })
-                        .then(move|args| {
-                            let (status, boss) = args.unwrap();
-                            println!("command for \"{}\" has terminated with status {}", client, status);
-                            boss.cleanup(&client);
-                            futures::future::ok(())
-                        });
-                    rt::spawn(command_complete);
-                    Response::new(Body::from("available\n"))
-                },
-                LaunchResult::AlreadyRunning => Response::new(Body::from("available\n")),
-                LaunchResult::ClientNotFound => non_ok_response!(StatusCode::NOT_FOUND,
-                                                                 format!("no client \"{}\"", client)),
-                LaunchResult::Err => non_ok_response!(StatusCode::INTERNAL_SERVER_ERROR,
-                                                      "couldn't start"),
+/* The command specification's deserialization helper
+*/
+fn get_argv_from_str<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+    String::deserialize(deserializer)
+        .and_then(|cmd| shellwords::split(&cmd).map_err(|_| Error::custom("mismatched quotes")))
+}
+
+/* The output type of the future returned when processes are spawned.
+*/
+struct CompletedCmd {
+    name: String,
+    started_at: Instant,
+    exit_status: ExitStatus,
+}
+
+/* Helper to spawn a process and return its future. The future provided by
+   tokio::Process doesn't return everything needed to process the termination,
+   so this augments it with some extra items: the start time and the textual
+   identifier of the command. To do it, this maps the future to another
+   future: an anonymous async function that takes ownership of the data to
+   be saved and then awaits the "real" future (Tokio's Child). On completion,
+   the result is mapped to an instance of CompletedCmd.
+*/
+fn get_cmd_future(
+    name: &str,
+    cmd: &mut CmdSpec,
+) -> Result<impl Future<Output = Result<CompletedCmd, std::io::Error>>, std::io::Error> {
+    Command::new(&cmd.argv[0])
+        .args(&cmd.argv[1..])
+        .spawn()
+        .map(|r| {
+            cmd.pid = Some(Pid::from_raw(r.id() as i32));
+            let name = String::from(name);
+            let started_at = Instant::now();
+            async move {
+                r.await.map(|exit_status| CompletedCmd {
+                    name,
+                    started_at,
+                    exit_status,
+                })
             }
         })
-    };
-    
-    let server = Server::bind(&addr).serve(boss_service)
-        .map_err(|e| eprintln!("server error: {}", e));
-    println!("Listening on http://{}", addr);
-    rt::run(server);
 }
 
-fn run_daemon(boss: Boss) -> Result<(), String> {
-    let stdout = File::create(DEFAULT_DAEMON_STDOUT_FILENAME)
-        .map_err(|e| format!("couldn't open {} -- {}",
-                             DEFAULT_DAEMON_STDOUT_FILENAME, e))?;
-    let stderr = File::create(DEFAULT_DAEMON_STDERR_FILENAME)
-                .map_err(|e| format!("couldn't open {} -- {}",
-                             DEFAULT_DAEMON_STDERR_FILENAME, e))?;
-    let daemonize = Daemonize::new().pid_file("/var/run/boss.pid")
-                            .stdout(stdout).stderr(stderr);
-    daemonize.start().map_err(|e| format!("couldn't daemonize -- {}", e))?;
-    Ok(run(boss))
+/* Read the commands to run from a YAML file into a commands collection.
+*/
+fn read_cmds(path: &str) -> Result<Cmds> {
+    Ok(serde_yaml::from_reader(std::fs::File::open(path)?)?)
 }
 
-fn main() {
-    let matches = App::new("boss")
-        .version(VERSION)
-        .author("Chuck Musser <cmusser@sonic.net>")
-        .about("start processes on behalf of network clients")
-        .arg(Arg::with_name("config").empty_values(false)
-             .short("c").long("config")
-             .help("YAML file containing configuration")
-             .default_value(DEFAULT_CONFIG_FILE))
-        .arg(Arg::with_name("foreground")
-             .short("f").long("foreground")
-             .help("Run in foreground"))
-        .get_matches();
-
-    match Boss::new(matches.value_of("config").unwrap()) {
-        Ok(boss) => {
-            if matches.is_present("foreground") {
-                run(boss)
-            } else {
-                if let Err(e) = run_daemon(boss) { eprintln!("failed: {}", e) }
-            }
-        },
-        Err(e) => eprintln!("{}", e),
+/* This is a closure for the filter_map function. It allows the futures
+   Vec builder to return only a list of commands that were spawned successfully
+   The failed ones are filtered out here along with a warning being printed.
+*/
+fn only_ok(
+    spawn_result: Result<
+        impl Future<Output = Result<CompletedCmd, std::io::Error>>,
+        std::io::Error,
+    >,
+) -> Option<impl Future<Output = Result<CompletedCmd, std::io::Error>>> {
+    match spawn_result {
+        Ok(process) => Some(process),
+        Err(e) => {
+            println!("{:?}", e);
+            None
+        }
     }
+}
+
+/* Some convenience functions for starting and stopping processes
+*/
+
+/* TODO: Refactoring the start logic into a function cleanly depends on being
+  able to use the unstable type_alias_impl_trait feature which allows the
+  command future to be a specific type rather than an opaque one that cannot
+  be guaranteed to be the right type in all the places where it is passed
+  around. For platforms where a nightly build is not available, another
+  techinque needs to be used, like simply repeating the code, which is what
+  is done currently.
+*/
+fn stop_process(cmd_name: &str, cmds: &mut Cmds) {
+    match cmds.get(cmd_name).unwrap().pid {
+        Some(pid) => match kill(pid, Signal::SIGTERM) {
+            Ok(()) => {
+                println!("stopping {} (pid: {})", cmd_name, pid);
+                cmds.remove(cmd_name);
+            }
+            Err(e) => eprintln!("error signaling process: {:?}", e),
+        },
+        None => eprintln!("{} not running", cmd_name),
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[derive(Debug, StructOpt)]
+    #[structopt(name = "boss", about = "Process manager")]
+    struct Opt {
+        /// Path to configuration file
+        #[structopt(short, long, default_value = "boss.yaml")]
+        config_file: String,
+    }
+    let opt = Opt::from_args();
+
+    let mut cmds = read_cmds(&opt.config_file)?;
+
+    let mut hangups = signal(SignalKind::hangup())?;
+
+    /* The FutureUnordered is populated in two places: from a Vec of futures
+    here, at startup, and by pushing individual futures later, after the
+    processes finish. The specific types are inferred by the return signatures
+    of the `get_cmd_future() and `only_ok()` functions. Even though the types
+    look the same, they are two different types in view of the type system.
+    Because of this, the `Either` wrapper type must be used to accomodate
+    both of them. The other way to handle the type variability is via using
+    BoxFutures but Either doesn't involve a heap allocation.
+    */
+    let mut all_futures: FuturesUnordered<_> = cmds
+        .iter_mut()
+        .map(|(name, cmd)| get_cmd_future(name, cmd))
+        .filter_map(only_ok)
+        .map(|ok| Either::Left(ok))
+        .collect();
+
+    loop {
+        tokio::select! {
+            _ = hangups.recv() => {
+                match read_cmds(&opt.config_file) {
+                    Ok(mut new_cmds) => {
+                        let cur_cmd_names: HashSet<String> = cmds.keys().cloned().collect();
+                        let updated_cmd_names: HashSet<String> = new_cmds.keys().cloned().collect();
+                        let mut changes = false;
+
+                        /* Stop commands that have been removed from the list. */
+                        for cmd_name in cur_cmd_names.difference(&updated_cmd_names) {
+                            changes = true;
+                            stop_process(cmd_name, &mut cmds);
+                        }
+
+                        /* Start newly-added commands. */
+                        for cmd_name in updated_cmd_names.difference(&cur_cmd_names) {
+                            changes = true;
+                            let mut cmd = new_cmds.remove(cmd_name).unwrap();
+                            match get_cmd_future(cmd_name, &mut cmd) {
+                                Ok(spawned_child) => {
+                                    println!("starting {}", cmd_name);
+                                    all_futures.push(Either::Right(spawned_child));
+                                    cmds.insert(cmd_name.to_string(), cmd);
+                                }
+                                Err(e) => println!("spawn failed: {:?}", e),
+                            }
+                        }
+
+                        /* Stop and restart commands that have been updated. */
+                        for cmd_name in cur_cmd_names.intersection(&updated_cmd_names) {
+                            if cmds.get(cmd_name).unwrap().argv != new_cmds.get(cmd_name).unwrap().argv {
+                                changes = true;
+                                let mut cmd = new_cmds.remove(cmd_name).unwrap();
+                                // It's possible that the new process won't start after the old
+                                // one terminates which may be bad in situations where you want
+                                // to minimize downtime.
+                                stop_process(cmd_name, &mut cmds);
+                                match get_cmd_future(cmd_name, &mut cmd) {
+                                    Ok(spawned_child) => {
+                                        println!("starting {}", cmd_name);
+                                        all_futures.push(Either::Right(spawned_child));
+                                        cmds.insert(cmd_name.to_string(), cmd);
+                                    }
+                                    Err(e) => println!("spawn failed: {:?}", e),
+                                }
+                            }
+                        }
+                        if !changes { println!("no changes to commands") }
+                   },
+                   Err(e) => eprintln!("error re-reading config: {:?}", e),
+                }
+            },
+
+            /* The resolved future here is the next completed item of the stream,
+               which is a two level construct: an Option that contains a Result.
+            */
+            completed_process = all_futures.next() => {
+                /* The first level (the Option) is either an actual Result of one of
+                   the Child futures, or the None value indicating end of stream. In
+                   practice, this would only be reached if the user removed all the
+                   commands from the config, which is unlikely.
+                */
+                match completed_process {
+                    Some(result) => {
+                       /* The second level (the Result) is the final disposition of the process.
+                          Both zero and non-zero exit statuses come through the Ok case, so it's
+                          unclear how the Err case happens. But it's possible to get a
+                          std::io::Error here.
+                       */
+                        match result {
+                            Ok(child) => {
+                                let result = match child.exit_status.code() {
+                                    Some(code) => format!("exited with status {}", code),
+                                    None => format!("terminated by signal")
+                                };
+                                println!(
+                                    "{}: {}, after {} sec.",
+                                    child.name,
+                                    result,
+                                    child.started_at.elapsed().as_secs(),
+                                );
+                                match cmds.get_mut(&child.name) {
+                                    Some(cmd) => match get_cmd_future(&child.name, cmd) {
+                                        Ok(spawned_child) => {
+                                            println!("restarting: {}", child.name);
+                                            all_futures.push(Either::Right(spawned_child))
+                                        }
+                                        Err(e) => println!("spawn failed: {:?}", e),
+                                    },
+                                    None => println!("final invocation of : {}", child.name),
+                                }
+                            }
+                            /* TODO: the Error variant doesn't contain the command
+                               information (specifically the name), it wouldn't be
+                               possible to restart here, or print the name of which
+                               command failed. Need to map the Error associated type
+                               for the future.
+                            */
+                            Err(e) => eprintln!("error with process spawn: {:?}", e),
+                        }
+                    }
+                    None => {
+                        println!("All processes finished");
+                        break;
+                    }
+                }
+            },
+        }
+    }
+    Ok(())
 }
