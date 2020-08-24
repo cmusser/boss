@@ -108,9 +108,6 @@ fn only_ok(
     }
 }
 
-/* Some convenience functions for starting and stopping processes
-*/
-
 /* TODO: Refactoring the start logic into a function cleanly depends on being
   able to use the unstable type_alias_impl_trait feature which allows the
   command future to be a specific type rather than an opaque one that cannot
@@ -118,6 +115,9 @@ fn only_ok(
   around. For platforms where a nightly build is not available, another
   techinque needs to be used, like simply repeating the code, which is what
   is done currently.
+*/
+
+/* A convenience function for stopping processes
 */
 fn stop_process(cmd_name: &str, cmds: &mut Cmds) {
     match cmds.get(cmd_name).unwrap().pid {
@@ -147,14 +147,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut hangups = signal(SignalKind::hangup())?;
 
-    /* The FutureUnordered is populated in two places: from a Vec of futures
-    here, at startup, and by pushing individual futures later, after the
-    processes finish. The specific types are inferred by the return signatures
-    of the `get_cmd_future() and `only_ok()` functions. Even though the types
-    look the same, they are two different types in view of the type system.
-    Because of this, the `Either` wrapper type must be used to accomodate
-    both of them. The other way to handle the type variability is via using
-    BoxFutures but Either doesn't involve a heap allocation.
+    /* All commands become part of a FutureUnordered stream which is populated
+    in two places: from a Vec of futures here, at startup, and by pushing
+    individual futures later, after the processes finish. The specific
+    types are inferred by the return signatures of the `get_cmd_future()
+    and `only_ok()` functions. Even though the types look the same, they
+    are two different types in view of the type system.  Because of this,
+    the `Either` wrapper type must be used to accomodate both of them. The
+    other way to handle the type variability is via using BoxFutures but
+    Either doesn't involve a heap allocation.
     */
     let mut all_futures: FuturesUnordered<_> = cmds
         .iter_mut()
@@ -165,7 +166,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         tokio::select! {
-            /* Process the receipt of the HUP signal */
+            /* Process the receipt of the HUP signal. */
             _ = hangups.recv() => {
                 match read_cmds(&opt.config_file) {
                     Ok(mut new_cmds) => {
@@ -211,8 +212,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             },
 
-            /* The resolved future here is the next completed item of the stream,
-               which is a two level construct: an Option that contains a Result.
+            /* Process command terminations. The resolved future here is the
+               next item of the FuturesUnordered stream. These items are a
+               two level construct: an Option that contains a Result.
             */
             completed_process = all_futures.next() => {
                 /* The first level (the Option) is either an actual Result of one of

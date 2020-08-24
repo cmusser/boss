@@ -2,7 +2,7 @@
 
 ## Overview
 BOSS manages a set of commmands described in a YAML file, spawning
-a process for each in the forground and waiting for them to finish.
+a process for each in the foreground and waiting for them to finish.
 On completion, the processes are restarted. You can add, remove
 or update the commands in the YAML file and inform BOSS via a 
 signal. In response, it will update the set of running commands, spawning
@@ -13,7 +13,7 @@ and terminating processes as needed.
 A specific application is deploying [vpnd](https://github.com/cmusser/vpnd),
 a VPN system where each process interacts with a single client. To serve
 multiple clients, multiple server processes are needed, which gets unwieldy
-if managed by hand. One way to solving this problem would be modifying
+if managed by hand. One way to solve this problem would be to modify
 `vpnd` itself to support multiple clients. But this adds complexity, and
 inevitably, bugs and performance degradation. `boss` allows easy management
 for cases similar to this.
@@ -23,8 +23,8 @@ for cases similar to this.
 ### Configuration
 
 The configuration file is in YAML format and describes the list of commands.
-Each command has a name, and the actual command to execute:
-invoke is specified. The configuration looks like this:
+Each command has a name, and the actual command to execute: The configuration
+looks like this:
 
     First Task:
       argv: /usr/bin/cmd first 4
@@ -49,12 +49,11 @@ The previous version of this program took a substantially different form, both
 in design and implementation. It used to have a webserver frontend, the idea
 being that one started processes individually via REST requests. Aside from
 the potential for security problems (like, don't just run this bound to an
-Internet-exposed address), individual launching didn't actually add much value.
+Internet-exposed interface), individual launching didn't actually add much value.
 If you want to start processes in an ad hoc manner, just start them by hand.
 
-As for the implementation, it included a Hyper-based webserver and was
-pre-`async/.await`, so the the asynchronous aspects of the program were
-harder to read.
+As for the implementation, it was pre-`async/.await`, so the the asynchronous
+aspects of the program were harder to read.
 
 ## Future
 This could evolve into an something that could be used instead of `systemd`
@@ -65,10 +64,3 @@ for signal handling in general, like responding differently depending on the
 signal received by a process. Another enhancement might be reloading by
 simply editing the configuration file, which `boss` could watch via `inotify`
 or a similar mechanism. No need to send a signal to re-read the config.
-
-Right now, the process starting logic is repeated in three different places
-because factoring it out into a function involves type-system challenges best
-addresses by an unstable feature that allows type aliases for `impl Trait`.
-This is described by [Rust RFC 2515](https://github.com/rust-lang/rfcs/blob/master/text/2515-type_alias_impl_trait.md).
-To keep things compilable on stable, repetition is used, but a branch that
-uses this feature will be maintained for experimentation.
