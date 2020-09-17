@@ -53,6 +53,7 @@ version = "2.0.0"
 dependencies = [
  "anyhow",
  "futures",
+ "libc",
  "nix",
  "serde",
  "serde_yaml",
@@ -256,9 +257,9 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
-version = "0.2.73"
+version = "0.2.77"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd7d4bd64732af4bf3a67f367c27df8520ad7e230c5817b8ff485864d80242b9"
+checksum = "f2f96b10ec2560088a8e76961b00d47107b3a625fecb76dedb29ee7ccbf98235"
 
 [[package]]
 name = "linked-hash-map"
@@ -359,8 +360,8 @@ dependencies = [
 [[package]]
 name = "nix"
 version = "0.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83450fe6a6142ddd95fb064b746083fc4ef1705fe81f64a64e1d4b39f54a1055"
+source = "git+https://github.com/cmusser/nix.git?branch=topic/dragonfly-use-errno-location#113cd85e15c2f0d3565d30fd5102abeff0458064"
+checksum = "054b0dc9328f630d85e0370f40eec73b7c5b6591b00c74ff422f782e0b80da28"
 dependencies = [
  "bitflags",
  "cc",
