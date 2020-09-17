@@ -9,7 +9,6 @@ edition = "2018"
 [dependencies]
 anyhow = "1"
 futures = "0.3"
-libc = "0.2.77"
 nix = { git = "https://github.com/cmusser/nix.git", branch="topic/dragonfly-use-errno-location" }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.8"
