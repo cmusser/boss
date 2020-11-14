@@ -146,6 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut cmds = read_cmds(&opt.config_file)?;
 
     let mut hangups = signal(SignalKind::hangup())?;
+    let mut terms = signal(SignalKind::terminate())?;
 
     /* All commands become part of a FutureUnordered stream which is populated
     in two places: from a Vec of futures here, at startup, and by pushing
@@ -209,6 +210,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if !changes { println!("no changes to commands") }
                    },
                    Err(e) => eprintln!("error re-reading config: {:?}", e),
+                }
+            },
+
+            _ = terms.recv() => {
+                println!("terminating");
+                let cur_cmd_names: HashSet<String> = cmds.keys().cloned().collect();
+                for cmd_name in cur_cmd_names {
+                    stop_process(&cmd_name, &mut cmds);
                 }
             },
 
