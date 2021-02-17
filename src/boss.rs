@@ -69,12 +69,15 @@ fn get_cmd_future(
     Command::new(&cmd.argv[0])
         .args(&cmd.argv[1..])
         .spawn()
-        .map(|r| {
-            cmd.pid = Some(Pid::from_raw(r.id() as i32));
+        .map(|mut r| {
+            cmd.pid = match r.id() {
+                Some(id) => Some(Pid::from_raw(id as i32)),
+                None => None,
+            };
             let name = String::from(name);
             let started_at = Instant::now();
             async move {
-                r.await.map(|exit_status| CompletedCmd {
+                r.wait().await.map(|exit_status| CompletedCmd {
                     name,
                     started_at,
                     exit_status,
@@ -132,7 +135,7 @@ fn stop_process(cmd_name: &str, cmds: &mut Cmds) {
     }
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[derive(Debug, StructOpt)]
     #[structopt(name = "boss", about = "Process manager")]

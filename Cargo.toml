@@ -1,6 +1,6 @@
 [package]
 name = "boss"
-version = "2.0.1"
+version = "2.1.0"
 authors = ["Chuck Musser <cmusser@sonic.net>"]
 edition = "2018"
 
@@ -14,7 +14,7 @@ serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.8"
 shellwords = "1"
 structopt = "0.3"
-tokio = { version = "0.2", features = ["macros", "process", "signal"] }
+tokio = { version = "1", features = ["macros", "process", "rt", "signal"] }
 
 [[bin]]
 name = "boss"
